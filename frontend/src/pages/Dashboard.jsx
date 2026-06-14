@@ -1,18 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api, { formatApiErrorDetail } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import {
-  Stethoscope, ClipboardList, Bell, Users as UsersIcon, ArrowUpRight, Clock,
+  Stethoscope, ClipboardList, Bell, Users as UsersIcon, ArrowUpRight, Clock, Plus,
 } from "lucide-react";
 
-const SAMPLE_APPTS = [
-  { time: "09:30 AM", name: "Rahul Kumar", ag: "38 / M", reason: "Diabetes follow-up", status: "Confirmed" },
-  { time: "10:15 AM", name: "Priya Sharma", ag: "30 / F", reason: "Migraine review", status: "Confirmed" },
-  { time: "11:00 AM", name: "Vikram Singh", ag: "52 / M", reason: "BP check-up", status: "Waiting" },
-  { time: "12:30 PM", name: "Ananya Iyer", ag: "23 / F", reason: "Asthma flare", status: "Confirmed" },
-  { time: "02:45 PM", name: "Mohammed Khan", ag: "35 / M", reason: "Anxiety review", status: "Confirmed" },
+const APPT_SLOTS = [
+  { time: "09:30 AM", reason: "Routine check-up", status: "Confirmed" },
+  { time: "10:15 AM", reason: "Follow-up review", status: "Confirmed" },
+  { time: "11:00 AM", reason: "New symptoms", status: "Waiting" },
+  { time: "12:30 PM", reason: "Medication review", status: "Confirmed" },
+  { time: "02:45 PM", reason: "Test results discussion", status: "Confirmed" },
 ];
 
 const STATUS_COLORS = {
@@ -62,26 +62,31 @@ export default function Dashboard() {
     api.get("/consultations").then((r) => setRecent(r.data || [])).catch(() => {});
   }, []);
 
-  const startConsultation = async (patientName) => {
+  const startConsultation = async (patientId) => {
     try {
-      let list = patients;
-      if (!list || list.length === 0) {
-        const { data } = await api.get("/patients");
-        list = data || [];
-        setPatients(list);
-      }
-      const patient = list.find((p) => p.full_name === patientName);
-      if (!patient) {
-        toast.error(`${patientName} is not in your patient list yet. Add them first.`);
-        navigate("/patients");
-        return;
-      }
-      const { data } = await api.post("/consultations", { patient_id: patient.patient_id });
+      const { data } = await api.post("/consultations", { patient_id: patientId });
       navigate(`/consultation/${data.consultation_id}`);
     } catch (e) {
       toast.error(formatApiErrorDetail(e.response?.data?.detail) || "Could not start consultation");
     }
   };
+
+  const appointments = useMemo(() => {
+    return patients.slice(0, 5).map((p, i) => {
+      const slot = APPT_SLOTS[i] || APPT_SLOTS[APPT_SLOTS.length - 1];
+      const age = p.date_of_birth
+        ? Math.floor((Date.now() - new Date(p.date_of_birth).getTime()) / (365.25 * 86400000))
+        : "—";
+      return {
+        patient_id: p.patient_id,
+        name: p.full_name,
+        ag: `${age} / ${p.gender?.[0] || "—"}`,
+        time: slot.time,
+        reason: slot.reason,
+        status: slot.status,
+      };
+    });
+  }, [patients]);
 
   return (
     <div>
@@ -109,49 +114,69 @@ export default function Dashboard() {
         <div className="flex items-end justify-between mb-4">
           <div>
             <h2 className="font-heading text-2xl font-medium text-[#0F172A]">Today&apos;s Appointments</h2>
-            <p className="text-sm text-[#64748B] mt-1">Sample schedule. Click &ldquo;Start&rdquo; to record a consultation.</p>
+            <p className="text-sm text-[#64748B] mt-1">Sample schedule built from your patient list. Click &ldquo;Start&rdquo; to record a consultation.</p>
           </div>
         </div>
-        <div className="bg-white border border-[#E2E8F0] rounded-xl shadow-sm overflow-hidden">
-          <table className="w-full text-left">
-            <thead className="bg-[#F8FAFC] text-xs uppercase tracking-wider text-[#64748B] font-semibold">
-              <tr>
-                <th className="p-4">Time</th>
-                <th className="p-4">Patient Name</th>
-                <th className="p-4">Age / Gender</th>
-                <th className="p-4">Reason</th>
-                <th className="p-4">Status</th>
-                <th className="p-4 text-right">Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {SAMPLE_APPTS.map((a, i) => (
-                <tr key={i} className="border-t border-[#E2E8F0] hover:bg-[#F8FAFC] transition-colors">
-                  <td className="p-4 text-sm font-medium text-[#0F172A]">
-                    <Clock className="inline h-3.5 w-3.5 mr-1.5 text-[#94A3B8]" /> {a.time}
-                  </td>
-                  <td className="p-4 text-sm text-[#0F172A]">{a.name}</td>
-                  <td className="p-4 text-sm text-[#64748B]">{a.ag}</td>
-                  <td className="p-4 text-sm text-[#64748B]">{a.reason}</td>
-                  <td className="p-4">
-                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                      a.status === "Confirmed" ? "bg-teal-50 text-teal-700" : "bg-amber-50 text-amber-700"
-                    }`}>{a.status}</span>
-                  </td>
-                  <td className="p-4 text-right">
-                    <button
-                      data-testid={`start-consult-${i}`}
-                      onClick={() => startConsultation(a.name)}
-                      className="px-4 h-9 rounded-lg bg-[#0D5C55] hover:bg-[#09403B] text-white text-sm font-medium transition-colors"
-                    >
-                      Start Consultation
-                    </button>
-                  </td>
+
+        {appointments.length === 0 ? (
+          <div className="bg-white border border-dashed border-[#E2E8F0] rounded-xl p-12 text-center">
+            <div className="h-12 w-12 mx-auto rounded-xl bg-[#F8FAFC] flex items-center justify-center text-[#0D5C55] mb-3">
+              <UsersIcon className="h-5 w-5" />
+            </div>
+            <div className="font-heading text-lg text-[#0F172A]">No patients yet</div>
+            <div className="text-sm text-[#64748B] mt-1 mb-5">
+              Add your first patient to begin recording consultations and generating summaries.
+            </div>
+            <button
+              data-testid="dashboard-add-first-patient-btn"
+              onClick={() => navigate("/patients")}
+              className="h-11 px-5 rounded-lg bg-[#0D5C55] hover:bg-[#09403B] text-white font-medium inline-flex items-center gap-2"
+            >
+              <Plus className="h-4 w-4" /> Add Your First Patient
+            </button>
+          </div>
+        ) : (
+          <div className="bg-white border border-[#E2E8F0] rounded-xl shadow-sm overflow-hidden">
+            <table className="w-full text-left">
+              <thead className="bg-[#F8FAFC] text-xs uppercase tracking-wider text-[#64748B] font-semibold">
+                <tr>
+                  <th className="p-4">Time</th>
+                  <th className="p-4">Patient Name</th>
+                  <th className="p-4">Age / Gender</th>
+                  <th className="p-4">Reason</th>
+                  <th className="p-4">Status</th>
+                  <th className="p-4 text-right">Action</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {appointments.map((a, i) => (
+                  <tr key={a.patient_id} className="border-t border-[#E2E8F0] hover:bg-[#F8FAFC] transition-colors">
+                    <td className="p-4 text-sm font-medium text-[#0F172A]">
+                      <Clock className="inline h-3.5 w-3.5 mr-1.5 text-[#94A3B8]" /> {a.time}
+                    </td>
+                    <td className="p-4 text-sm text-[#0F172A]">{a.name}</td>
+                    <td className="p-4 text-sm text-[#64748B]">{a.ag}</td>
+                    <td className="p-4 text-sm text-[#64748B]">{a.reason}</td>
+                    <td className="p-4">
+                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                        a.status === "Confirmed" ? "bg-teal-50 text-teal-700" : "bg-amber-50 text-amber-700"
+                      }`}>{a.status}</span>
+                    </td>
+                    <td className="p-4 text-right">
+                      <button
+                        data-testid={`start-consult-${i}`}
+                        onClick={() => startConsultation(a.patient_id)}
+                        className="px-4 h-9 rounded-lg bg-[#0D5C55] hover:bg-[#09403B] text-white text-sm font-medium transition-colors"
+                      >
+                        Start Consultation
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
 
       {/* Recent Consultations */}
