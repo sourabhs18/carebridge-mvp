@@ -909,16 +909,23 @@ async def upcoming_followups(user=Depends(get_current_user)):
 # --- Resume previous draft consultation (Item #15) ---
 @api_router.get("/dashboard/active-draft")
 async def active_draft(user=Depends(get_current_user)):
-    """Return the most recent unapproved consultation that has any activity (transcript, vitals)."""
+    """Return the most recent unapproved consultation that has actual progress
+    (a transcript, audio recording, or any vital filled). Avoids surfacing
+    brand-new empty consultations as 'drafts to resume'."""
     doc = await db.consultations.find_one(
         {
             "doctor_id": str(user["_id"]),
             "approved": False,
             "$or": [
-                {"transcript": {"$ne": ""}},
-                {"vitals": {"$ne": {}}},
-                {"visit_reason": {"$ne": ""}},
-                {"symptoms": {"$ne": ""}},
+                {"transcript": {"$nin": ["", None]}},
+                {"audio_path": {"$nin": [None, ""]}},
+                {"vitals.bp": {"$nin": ["", None]}},
+                {"vitals.hr": {"$nin": ["", None]}},
+                {"vitals.temp": {"$nin": ["", None]}},
+                {"vitals.spo2": {"$nin": ["", None]}},
+                {"vitals.weight": {"$nin": ["", None]}},
+                {"symptoms": {"$nin": ["", None]}},
+                {"duration_seconds": {"$gt": 0}},
             ],
         },
         sort=[("updated_at", -1)],
