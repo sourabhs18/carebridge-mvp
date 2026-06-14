@@ -1,0 +1,50 @@
+{
+  "summary": "CareBridge V2 end-to-end testing complete. New pytest suite /app/backend/tests/test_carebridge_v2.py covers all V2 features: 403 self-registration, search/patients (mask + min_length + phone-digits), dashboard/activity, dashboard/active-draft, followups/upcoming, autosave (persistence + 404), duration, followup (with timeline log), patient timeline (reverse-chronological), family-accounts (create, list, add member, member-phone inheritance, consultations scoping, consent required), auto-generate (Claude — single call), backward compat (legacy summary endpoints + simple patient create), privacy (list masks vs detail unmasked) — 26/26 PASSED. Frontend Playwright covered: Login V2 (no Create Account, Contact admin info present), all 6 stat cards + Recent Activity widget + Patient App Coming Soon, Start Consultation dialog opens & search returns Rahul Kumar, navigates to /consultation/{cid}, big 00:00:00 timer renders, save-transcript-btn present, Quick-Add patient flow creates patient + consultation, Patient Profile family + timeline tabs present, Create Family makes patient 'Self' and exposes Add Family Member, Timeline shows events (Consultation Started, AI Summary Generated, Follow-up Scheduled), SummaryReview followup-date-input renders, Approve button present, share-patient-btn correctly hidden until approval. ALL V2 ACCEPTANCE CHECKS GREEN.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/auth/admin-create-doctor", "issue": "Body field is named 'role' implicitly via hardcoding 'doctor' — admin cannot create a non-doctor user. Acceptable for V2 scope but document the constraint."},
+      {"endpoint": "/api/consultations/{cid}/auto-generate", "issue": "On generation failure resets summary_status to 'not_generated' but does NOT log a 'summary_generation_failed' activity event — recovery from failure is opaque to the audit log."},
+      {"endpoint": "/api/dashboard/active-draft", "issue": "Treats any consultation with vitals={} OR visit_reason!='' as 'active'. A consultation that was created with just a visit_reason (the default flow) is immediately surfaced as a draft to resume. Consider also gating on transcript or recording_started_at to avoid noisy banners."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Login", "issues": ["Email/password fields still pre-filled with demo credentials in production-looking UI — flagged in iteration_1, still present."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_carebridge_v2.py",
+    "/app/backend/tests/test_carebridge_api.py",
+    "/app/test_reports/pytest/pytest_v2.xml"
+  ],
+  "action_items": [
+    "No blocking bugs. Optionally tighten /api/dashboard/active-draft heuristic so an empty consultation with only visit_reason set does not surface as a draft.",
+    "Optionally log 'summary_generation_failed' activity event when /auto-generate exceptions, for audit completeness.",
+    "Carry-over from iteration_1: tighten CORS_ORIGINS (set explicit URL instead of '*') since allow_credentials=True is in use.",
+    "Carry-over: remove demo credential prefill from Login.jsx before any production deployment."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now 1231 lines — past the 700-line soft threshold. Split into routers/{auth,patients,consultations,family,dashboard,search}.py and services/{ai,storage,activity}.py.",
+    "auto_generate_both runs two sequential Claude calls in a foreground request (~10-20s). Consider background task + polling endpoint so the UI does not hold an open HTTP connection that long (and survives client disconnect).",
+    "Patient/family scoping is correct (doctor_id filter everywhere checked), and family member phone inheritance is enforced server-side — privacy + multi-tenant scope are solid.",
+    "AutosaveUpdate model accepts vitals: Optional[dict] without schema — a malformed dict could pollute consultation.vitals. Consider a sub-model with explicit fields (bp, hr, temp, spo2).",
+    "FollowUpUpdate.followup_date is Optional[str] with no ISO validation — Pydantic Field(pattern=...) or date type would prevent garbage strings.",
+    "set_followup logs 'followup_scheduled' but does not log a corresponding 'followup_cleared' when followup_date is set to None — audit trail asymmetric.",
+    "derive_consultation_status is referenced but its definition wasn't seen in the slice viewed — confirm it returns one of the 6 documented labels (draft/pending_summary/generating/pending_review/approved/shared).",
+    "family-accounts: no endpoint to DELETE a family member or unlink a patient from a family — irreversible by API. Consider adding for completeness."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_carebridge_v2.py (new — 26 V2 tests)",
+    "/app/test_reports/pytest/pytest_v2.xml (new)"
+  ],
+  "success_rate": {"backend": "100% (26/26 V2 + 19/19 V1 from prior run)", "frontend": "100% on the V2 surfaces tested (login V2, dashboard, dialog, quick-add, profile tabs, family creation, timeline, summary review)"},
+  "test_credentials": "doctor@carebridge.health / CareBridge@2026 (seeded admin)",
+  "seed_data_creation": "Backend pytest created: TEST_FamPrimary User (+919811112222), TEST_Spouse User (family member), TEST_LegacyV2 Simple (+919811119911), TEST_NoConsent (400-tested only, not created), plus several TEST_v2-prefixed consultations on Rahul Kumar. Frontend Playwright created: 1 PT-* TEST_<unique>... patient via Quick-Add + its consultation, and 1 TEST_FamUI NewPrimary patient with a family account (FAM-*). All safely prunable by E1 — none collide with seeded sample patients.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Both pytest suites are stable regression: /app/backend/tests/test_carebridge_api.py (V1, 19 tests) and /app/backend/tests/test_carebridge_v2.py (V2, 26 tests). The V2 file makes exactly ONE /auto-generate Claude call (1-2 Emergent credits). For UI re-tests, use page.evaluate('fetch...') to call API with credentials:'include' — urllib outside the browser context cannot carry httpOnly cookies through the preview ingress. The Patient App nav item is intentionally non-clickable. Family member creation requires consent_given=true (returns 400 otherwise). SummaryReview share-patient-btn only renders after the consultation is approved.",
+  "rca of the issue": "No bugs to RCA. All 14 V2 acceptance criteria from the review_request validated as working. Minor non-blocking observations logged in backend_issues.minor + critical_code_review_comments."
+}

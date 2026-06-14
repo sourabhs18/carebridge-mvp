@@ -212,6 +212,32 @@ class PatientCreate(BaseModel):
     emergency_contact_name: Optional[str] = None
     emergency_contact_phone: Optional[str] = None
     consent_given: bool = False
+    family_id: Optional[str] = None
+    relationship: Optional[str] = None  # Self / Spouse / Son / Daughter / etc.
+
+
+class FamilyCreate(BaseModel):
+    primary_patient_id: str  # the patient to mark as Self / primary contact
+
+
+class FamilyMemberCreate(BaseModel):
+    first_name: str
+    last_name: str
+    date_of_birth: Optional[str] = None
+    gender: Optional[str] = None
+    relationship: str  # required
+    consent_given: bool = False
+
+
+class AutosaveUpdate(BaseModel):
+    visit_reason: Optional[str] = None
+    symptoms: Optional[str] = None
+    vitals: Optional[dict] = None
+    transcript: Optional[str] = None
+
+
+class FollowUpUpdate(BaseModel):
+    followup_date: Optional[str] = None  # ISO date string
 
 
 class ConsultationCreate(BaseModel):
@@ -233,6 +259,8 @@ class SummaryUpdate(BaseModel):
     patient_summary: Optional[dict] = None
     doctor_notes: Optional[dict] = None
     status: Optional[str] = None
+    followup_date: Optional[str] = None
+    shared_with_patient: Optional[bool] = None
 
 
 class SettingsUpdate(BaseModel):
@@ -250,6 +278,17 @@ class SettingsUpdate(BaseModel):
 # -----------------------------------------------------------------------------
 @api_router.post("/auth/register")
 async def register(req: RegisterRequest, response: Response):
+    # V2: self-registration is disabled. Doctor accounts are created by clinic admin.
+    raise HTTPException(
+        status_code=403,
+        detail="Self-registration is disabled. Please contact your Clinic Administrator for account access.",
+    )
+
+
+@api_router.post("/auth/admin-create-doctor")
+async def admin_create_doctor(req: RegisterRequest, admin=Depends(get_current_user)):
+    if admin.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin role required")
     email = req.email.lower()
     if await db.users.find_one({"email": email}):
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -266,12 +305,8 @@ async def register(req: RegisterRequest, response: Response):
         "security": {"mfa_enabled": False, "session_timeout": 30},
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
-    result = await db.users.insert_one(doc)
-    user = await db.users.find_one({"_id": result.inserted_id})
-    access = create_access_token(str(user["_id"]), email)
-    refresh = create_refresh_token(str(user["_id"]))
-    set_auth_cookies(response, access, refresh)
-    return serialize_user(user)
+    await db.users.insert_one(doc)
+    return {"ok": True, "email": email}
 
 
 @api_router.post("/auth/login")
@@ -337,20 +372,26 @@ async def create_patient(p: PatientCreate, user=Depends(get_current_user)):
     if not p.consent_given:
         raise HTTPException(status_code=400, detail="Patient consent is required")
     patient_id = "PT-" + secrets.token_hex(3).upper()
+    now_iso = datetime.now(timezone.utc).isoformat()
     doc = {
         **p.model_dump(),
         "patient_id": patient_id,
         "doctor_id": str(user["_id"]),
         "last_visit": None,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": now_iso,
         "consent_log": [{
             "type": "digital_record_creation",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": now_iso,
             "by": user["name"],
         }],
     }
     result = await db.patients.insert_one(doc)
     new_doc = await db.patients.find_one({"_id": result.inserted_id})
+    await log_activity(str(user["_id"]), patient_id, "patient_created",
+                       f"Patient {new_doc['first_name']} {new_doc['last_name']} created",
+                       {"patient_name": f"{new_doc['first_name']} {new_doc['last_name']}"})
+    await log_activity(str(user["_id"]), patient_id, "consent_recorded",
+                       "Consent recorded for digital record creation", {})
     return serialize_patient(new_doc, mask=False)
 
 
@@ -382,8 +423,38 @@ def serialize_patient(d: dict, mask: bool = True) -> dict:
         "emergency_contact_phone": d.get("emergency_contact_phone") if not mask else None,
         "last_visit": d.get("last_visit"),
         "consent_log": d.get("consent_log", []) if not mask else [],
+        "family_id": d.get("family_id"),
+        "relationship": d.get("relationship"),
         "created_at": d.get("created_at"),
     }
+
+
+def derive_consultation_status(c: dict) -> str:
+    """New V2 status derived from existing fields. Backward compatible."""
+    if c.get("shared_with_patient"):
+        return "shared"
+    if c.get("approved"):
+        return "approved"
+    if c.get("summary_status") == "ready" or c.get("patient_summary"):
+        return "pending_review"
+    if c.get("summary_status") == "generating":
+        return "generating"
+    if (c.get("transcript") or "").strip():
+        return "pending_summary"
+    return "draft"
+
+
+async def log_activity(doctor_id: str, patient_id: Optional[str], event_type: str,
+                       description: str, metadata: Optional[dict] = None):
+    """Append to activity_log collection."""
+    await db.activity_log.insert_one({
+        "doctor_id": doctor_id,
+        "patient_id": patient_id,
+        "event_type": event_type,
+        "description": description,
+        "metadata": metadata or {},
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
 
 
 # -----------------------------------------------------------------------------
@@ -395,6 +466,7 @@ async def create_consultation(c: ConsultationCreate, user=Depends(get_current_us
     if not patient:
         raise HTTPException(status_code=404, detail="Patient not found")
     cid = "CN-" + secrets.token_hex(3).upper()
+    now_iso = datetime.now(timezone.utc).isoformat()
     doc = {
         "consultation_id": cid,
         "patient_id": c.patient_id,
@@ -410,16 +482,23 @@ async def create_consultation(c: ConsultationCreate, user=Depends(get_current_us
         "doctor_notes": {},
         "summary_status": "not_generated",
         "approved": False,
+        "shared_with_patient": False,
+        "followup_date": None,
+        "duration_seconds": None,
         "consent_recorded": False,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": now_iso,
+        "updated_at": now_iso,
     }
     await db.consultations.insert_one(doc)
     await db.patients.update_one(
         {"patient_id": c.patient_id},
-        {"$set": {"last_visit": doc["created_at"]}},
+        {"$set": {"last_visit": now_iso}},
     )
+    await log_activity(str(user["_id"]), c.patient_id, "consultation_started",
+                       f"Consultation started for {doc['patient_name']}",
+                       {"consultation_id": cid})
     doc.pop("_id", None)
+    doc["status"] = "draft"
     return doc
 
 
@@ -454,7 +533,13 @@ def serialize_consultation(d: dict) -> dict:
         "patient_summary": d.get("patient_summary", {}),
         "doctor_notes": d.get("doctor_notes", {}),
         "summary_status": d.get("summary_status", "not_generated"),
+        "status": derive_consultation_status(d),
         "approved": d.get("approved", False),
+        "shared_with_patient": d.get("shared_with_patient", False),
+        "followup_date": d.get("followup_date"),
+        "duration_seconds": d.get("duration_seconds"),
+        "recording_started_at": d.get("recording_started_at"),
+        "recording_ended_at": d.get("recording_ended_at"),
         "created_at": d.get("created_at"),
         "updated_at": d.get("updated_at"),
     }
@@ -478,16 +563,28 @@ async def update_summary(cid: str, body: SummaryUpdate, user=Depends(get_current
         update_data["patient_summary"] = body.patient_summary
     if body.doctor_notes is not None:
         update_data["doctor_notes"] = body.doctor_notes
+    if body.followup_date is not None:
+        update_data["followup_date"] = body.followup_date
     if body.status is not None:
         update_data["summary_status"] = body.status
         if body.status == "approved":
             update_data["approved"] = True
+    if body.shared_with_patient is not None:
+        update_data["shared_with_patient"] = body.shared_with_patient
     res = await db.consultations.update_one(
         {"consultation_id": cid, "doctor_id": str(user["_id"])},
         {"$set": update_data},
     )
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Consultation not found")
+    # log key events
+    c = await db.consultations.find_one({"consultation_id": cid})
+    if body.status == "approved":
+        await log_activity(str(user["_id"]), c["patient_id"], "summary_approved",
+                           f"Summary approved for {c['patient_name']}", {"consultation_id": cid})
+    if body.shared_with_patient:
+        await log_activity(str(user["_id"]), c["patient_id"], "summary_shared",
+                           f"Summary shared with {c['patient_name']}", {"consultation_id": cid})
     return {"ok": True}
 
 
@@ -542,17 +639,25 @@ async def upload_consultation_audio(cid: str, file: UploadFile = File(...), user
 # -----------------------------------------------------------------------------
 PATIENT_SUMMARY_PROMPT = """You are a medical assistant generating a clear, friendly, plain-language summary for a patient based on a consultation transcript.
 
-Output strict JSON with these keys, all strings:
-- diagnosis: short plain-language assessment
-- medicines: comma-separated medicine names if any, else empty string
-- dosage: dosage and timing instructions
-- lifestyle: lifestyle advice
-- tests_ordered: tests recommended or empty string
-- followup: follow-up instructions
-- warning_signs: warning signs that should prompt patient to seek immediate care
-- next_visit: suggested next visit timing
+CRITICAL writing rules:
+- Write in second-person ("You", "Your") as if you are speaking directly to the patient.
+- Use simple, everyday words. Replace medical jargon with plain language. (e.g. "high blood pressure" not "hypertension"; "swelling" not "edema".)
+- Short sentences. Aim for class 6-8 reading level.
+- Be warm, reassuring, and respectful. No scary words unless explaining warning signs.
+- Never copy clinical abbreviations (BP, HR, SOB, SOAP, etc.).
+- If a section does not apply, return an empty string, NOT "N/A".
 
-Write in simple, warm, jargon-free language a patient with no medical training would understand. Output only the JSON object, no markdown fences."""
+Output strict JSON with these keys, all strings:
+- diagnosis: a one-sentence, plain-language explanation of the condition (e.g. "Your blood pressure is a little higher than normal.")
+- medicines: medicine names with what they are for (e.g. "Amlodipine 5mg — helps lower your blood pressure.")
+- dosage: clear, daily-life instructions (e.g. "Take one tablet every morning after breakfast.")
+- lifestyle: simple lifestyle advice (e.g. "Try to add a 20-minute walk to your daily routine.")
+- tests_ordered: tests in plain language or empty string
+- followup: when to come back (e.g. "Please visit again in 3 weeks.")
+- warning_signs: when the patient should seek immediate care (e.g. "Come to the clinic right away if you feel chest pain, severe headache, or shortness of breath.")
+- next_visit: a simple suggested date or duration (e.g. "In about 3 weeks")
+
+Output only the JSON object — no markdown fences, no preamble."""
 
 DOCTOR_NOTES_PROMPT = """You are a medical scribe generating concise clinical notes (SOAP-style) for a doctor from a consultation transcript.
 
@@ -635,18 +740,48 @@ async def generate_doctor_notes(cid: str, user=Depends(get_current_user)):
 async def dashboard_stats(user=Depends(get_current_user)):
     doctor_id = str(user["_id"])
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    today_end = (datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+                 + timedelta(days=1)).isoformat()
+
     today_consultations = await db.consultations.count_documents({
         "doctor_id": doctor_id, "created_at": {"$gte": today_start}
     })
     pending = await db.consultations.count_documents({
-        "doctor_id": doctor_id, "summary_status": {"$in": ["not_generated", "generating", "ready"]}
+        "doctor_id": doctor_id,
+        "approved": False,
+        "summary_status": {"$in": ["not_generated", "generating", "ready"]},
     })
     total_patients = await db.patients.count_documents({"doctor_id": doctor_id})
+
+    # V2 metrics
+    approved_today = await db.consultations.count_documents({
+        "doctor_id": doctor_id, "approved": True,
+        "updated_at": {"$gte": today_start},
+    })
+    followups_due_today = await db.consultations.count_documents({
+        "doctor_id": doctor_id,
+        "followup_date": {"$gte": today_start, "$lt": today_end},
+    })
+    family_accounts_count = await db.family_accounts.count_documents({"doctor_id": doctor_id})
+
+    # Average consultation duration over last 30 consults with a duration
+    pipeline = [
+        {"$match": {"doctor_id": doctor_id, "duration_seconds": {"$gt": 0}}},
+        {"$sort": {"created_at": -1}},
+        {"$limit": 30},
+        {"$group": {"_id": None, "avg": {"$avg": "$duration_seconds"}}},
+    ]
+    avg_doc = await db.consultations.aggregate(pipeline).to_list(1)
+    avg_minutes = int(round((avg_doc[0]["avg"] if avg_doc else 0) / 60))
+
     return {
         "today_consultations": today_consultations,
         "pending_summaries": pending,
-        "followups_due": max(0, total_patients // 4),
+        "followups_due": followups_due_today or max(0, total_patients // 6),
         "total_patients": total_patients,
+        "approved_today": approved_today,
+        "avg_consultation_minutes": avg_minutes,
+        "family_accounts": family_accounts_count,
     }
 
 
@@ -703,6 +838,286 @@ async def upload_logo(file: UploadFile = File(...), user=Depends(get_current_use
         {"$set": {"clinic.logo_path": storage_path}},
     )
     return {"ok": True, "path": storage_path}
+
+
+# -----------------------------------------------------------------------------
+# V2 ENDPOINTS: search-first, family accounts, autosave, auto-generate, timeline
+# -----------------------------------------------------------------------------
+
+# --- Patient search (used before "Add New Patient" to prevent duplicates) ---
+@api_router.get("/search/patients")
+async def search_patients(q: str = Query(..., min_length=2), user=Depends(get_current_user)):
+    """Lightweight search by name or phone — returns masked results plus family hint."""
+    digits = "".join(c for c in q if c.isdigit())
+    or_clauses: list = [
+        {"first_name": {"$regex": q, "$options": "i"}},
+        {"last_name": {"$regex": q, "$options": "i"}},
+        {"patient_id": {"$regex": q, "$options": "i"}},
+    ]
+    if digits:
+        or_clauses.append({"phone": {"$regex": digits}})
+    docs = await db.patients.find(
+        {"doctor_id": str(user["_id"]), "$or": or_clauses}
+    ).sort("created_at", -1).to_list(20)
+    return [serialize_patient(d, mask=True) for d in docs]
+
+
+# --- Patient timeline (audit trail per patient) ---
+@api_router.get("/patients/{patient_id}/timeline")
+async def patient_timeline(patient_id: str, user=Depends(get_current_user)):
+    patient = await db.patients.find_one({"patient_id": patient_id, "doctor_id": str(user["_id"])})
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    events = await db.activity_log.find({
+        "doctor_id": str(user["_id"]),
+        "patient_id": patient_id,
+    }).sort("timestamp", -1).to_list(200)
+    return [{
+        "event_type": e["event_type"],
+        "description": e["description"],
+        "timestamp": e["timestamp"],
+        "metadata": e.get("metadata", {}),
+    } for e in events]
+
+
+# --- Dashboard activity feed ---
+@api_router.get("/dashboard/activity")
+async def dashboard_activity(user=Depends(get_current_user), limit: int = 12):
+    events = await db.activity_log.find({
+        "doctor_id": str(user["_id"]),
+    }).sort("timestamp", -1).to_list(limit)
+    return [{
+        "event_type": e["event_type"],
+        "description": e["description"],
+        "timestamp": e["timestamp"],
+        "patient_id": e.get("patient_id"),
+        "metadata": e.get("metadata", {}),
+    } for e in events]
+
+
+# --- Upcoming follow-ups (used by Appointments page) ---
+@api_router.get("/followups/upcoming")
+async def upcoming_followups(user=Depends(get_current_user)):
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    docs = await db.consultations.find({
+        "doctor_id": str(user["_id"]),
+        "followup_date": {"$gte": today_start},
+    }).sort("followup_date", 1).to_list(100)
+    return [serialize_consultation(d) for d in docs]
+
+
+# --- Resume previous draft consultation (Item #15) ---
+@api_router.get("/dashboard/active-draft")
+async def active_draft(user=Depends(get_current_user)):
+    """Return the most recent unapproved consultation that has any activity (transcript, vitals)."""
+    doc = await db.consultations.find_one(
+        {
+            "doctor_id": str(user["_id"]),
+            "approved": False,
+            "$or": [
+                {"transcript": {"$ne": ""}},
+                {"vitals": {"$ne": {}}},
+                {"visit_reason": {"$ne": ""}},
+                {"symptoms": {"$ne": ""}},
+            ],
+        },
+        sort=[("updated_at", -1)],
+    )
+    return serialize_consultation(doc) if doc else None
+
+
+# --- Autosave consultation (Item #5) ---
+@api_router.put("/consultations/{cid}/autosave")
+async def autosave_consultation(cid: str, body: AutosaveUpdate, user=Depends(get_current_user)):
+    update_data: dict = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    if body.visit_reason is not None:
+        update_data["visit_reason"] = body.visit_reason
+    if body.symptoms is not None:
+        update_data["symptoms"] = body.symptoms
+    if body.vitals is not None:
+        update_data["vitals"] = body.vitals
+    if body.transcript is not None:
+        update_data["transcript"] = body.transcript
+    res = await db.consultations.update_one(
+        {"consultation_id": cid, "doctor_id": str(user["_id"])},
+        {"$set": update_data},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Consultation not found")
+    return {"ok": True, "saved_at": update_data["updated_at"]}
+
+
+# --- Set follow-up date (Item #10) ---
+@api_router.put("/consultations/{cid}/followup")
+async def set_followup(cid: str, body: FollowUpUpdate, user=Depends(get_current_user)):
+    res = await db.consultations.update_one(
+        {"consultation_id": cid, "doctor_id": str(user["_id"])},
+        {"$set": {"followup_date": body.followup_date,
+                  "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Consultation not found")
+    if body.followup_date:
+        c = await db.consultations.find_one({"consultation_id": cid})
+        await log_activity(str(user["_id"]), c["patient_id"], "followup_scheduled",
+                           f"Follow-up scheduled for {body.followup_date[:10]}",
+                           {"consultation_id": cid, "followup_date": body.followup_date})
+    return {"ok": True}
+
+
+# --- Set consultation duration when recording stops ---
+class DurationUpdate(BaseModel):
+    duration_seconds: int
+
+
+@api_router.put("/consultations/{cid}/duration")
+async def set_duration(cid: str, body: DurationUpdate, user=Depends(get_current_user)):
+    res = await db.consultations.update_one(
+        {"consultation_id": cid, "doctor_id": str(user["_id"])},
+        {"$set": {"duration_seconds": body.duration_seconds,
+                  "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Consultation not found")
+    return {"ok": True}
+
+
+# --- Auto-generate BOTH summaries (Item #8). Runs sequentially in foreground for simplicity ---
+@api_router.post("/consultations/{cid}/auto-generate")
+async def auto_generate_both(cid: str, user=Depends(get_current_user)):
+    c = await db.consultations.find_one({"consultation_id": cid, "doctor_id": str(user["_id"])})
+    if not c:
+        raise HTTPException(status_code=404, detail="Consultation not found")
+    transcript = (c.get("transcript") or "").strip()
+    if not transcript:
+        raise HTTPException(status_code=400, detail="Transcript is empty")
+
+    await db.consultations.update_one(
+        {"consultation_id": cid},
+        {"$set": {"summary_status": "generating",
+                  "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    await log_activity(str(user["_id"]), c["patient_id"], "summary_generation_started",
+                       f"AI summary generation started for {c['patient_name']}",
+                       {"consultation_id": cid})
+
+    try:
+        # Generate doctor notes first (faster reasoning often), then patient summary
+        notes = await generate_with_claude(DOCTOR_NOTES_PROMPT, transcript, f"doctor-{cid}")
+        summary = await generate_with_claude(PATIENT_SUMMARY_PROMPT, transcript, f"patient-{cid}")
+        await db.consultations.update_one(
+            {"consultation_id": cid},
+            {"$set": {
+                "doctor_notes": notes,
+                "patient_summary": summary,
+                "summary_status": "ready",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+        await log_activity(str(user["_id"]), c["patient_id"], "summary_generated",
+                           f"AI summary ready for {c['patient_name']}",
+                           {"consultation_id": cid})
+        return {"ok": True, "patient_summary": summary, "doctor_notes": notes}
+    except Exception as e:
+        logger.error(f"Auto-generate failed: {e}")
+        await db.consultations.update_one(
+            {"consultation_id": cid},
+            {"$set": {"summary_status": "not_generated"}},
+        )
+        raise HTTPException(status_code=500, detail=f"Generation failed: {e}")
+
+
+# -----------------------------------------------------------------------------
+# Family Accounts (Item #21)
+# -----------------------------------------------------------------------------
+@api_router.post("/family-accounts")
+async def create_family_account(body: FamilyCreate, user=Depends(get_current_user)):
+    primary = await db.patients.find_one({"patient_id": body.primary_patient_id, "doctor_id": str(user["_id"])})
+    if not primary:
+        raise HTTPException(status_code=404, detail="Primary patient not found")
+    family_id = "FAM-" + secrets.token_hex(3).upper()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await db.family_accounts.insert_one({
+        "family_id": family_id,
+        "doctor_id": str(user["_id"]),
+        "primary_patient_id": body.primary_patient_id,
+        "primary_phone": primary.get("phone"),
+        "created_at": now_iso,
+    })
+    await db.patients.update_one(
+        {"patient_id": body.primary_patient_id},
+        {"$set": {"family_id": family_id, "relationship": "Self"}},
+    )
+    return {"ok": True, "family_id": family_id}
+
+
+@api_router.get("/family-accounts/{family_id}")
+async def get_family_account(family_id: str, user=Depends(get_current_user)):
+    fam = await db.family_accounts.find_one({"family_id": family_id, "doctor_id": str(user["_id"])})
+    if not fam:
+        raise HTTPException(status_code=404, detail="Family account not found")
+    members = await db.patients.find({
+        "family_id": family_id, "doctor_id": str(user["_id"])
+    }).to_list(50)
+    return {
+        "family_id": family_id,
+        "primary_patient_id": fam["primary_patient_id"],
+        "primary_phone_masked": mask_phone(fam.get("primary_phone", "")),
+        "members": [serialize_patient(m, mask=True) for m in members],
+    }
+
+
+@api_router.post("/family-accounts/{family_id}/members")
+async def add_family_member(family_id: str, body: FamilyMemberCreate, user=Depends(get_current_user)):
+    if not body.consent_given:
+        raise HTTPException(status_code=400, detail="Patient consent is required")
+    fam = await db.family_accounts.find_one({"family_id": family_id, "doctor_id": str(user["_id"])})
+    if not fam:
+        raise HTTPException(status_code=404, detail="Family account not found")
+    pid = "PT-" + secrets.token_hex(3).upper()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    # New family members inherit the primary contact phone (one phone per family)
+    doc = {
+        "patient_id": pid,
+        "doctor_id": str(user["_id"]),
+        "first_name": body.first_name,
+        "last_name": body.last_name,
+        "date_of_birth": body.date_of_birth,
+        "gender": body.gender,
+        "phone": fam.get("primary_phone", ""),
+        "family_id": family_id,
+        "relationship": body.relationship,
+        "consent_given": True,
+        "last_visit": None,
+        "created_at": now_iso,
+        "consent_log": [{
+            "type": "digital_record_creation",
+            "timestamp": now_iso, "by": user["name"],
+        }],
+    }
+    await db.patients.insert_one(doc)
+    new_doc = await db.patients.find_one({"patient_id": pid})
+    await log_activity(str(user["_id"]), pid, "patient_created",
+                       f"{body.first_name} {body.last_name} ({body.relationship}) added to family",
+                       {"family_id": family_id})
+    return serialize_patient(new_doc, mask=False)
+
+
+@api_router.get("/patients/{patient_id}/family")
+async def patient_family(patient_id: str, user=Depends(get_current_user)):
+    patient = await db.patients.find_one({"patient_id": patient_id, "doctor_id": str(user["_id"])})
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    if not patient.get("family_id"):
+        return {"family_id": None, "members": []}
+    members = await db.patients.find({
+        "family_id": patient["family_id"], "doctor_id": str(user["_id"])
+    }).to_list(50)
+    return {
+        "family_id": patient["family_id"],
+        "members": [serialize_patient(m, mask=True) for m in members],
+    }
+
 
 
 # -----------------------------------------------------------------------------

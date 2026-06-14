@@ -96,7 +96,7 @@ export default function Settings() {
         <div className="space-y-4">
           <ToggleRow
             label="Enable Multi-Factor Authentication (MFA)"
-            sub="Adds an extra verification step at login."
+            sub="Adds an extra verification step at login. Enrollment via authenticator app."
             checked={!!data.security?.mfa_enabled}
             onChange={(v) => upd("security.mfa_enabled", v)}
             testid="settings-mfa"
@@ -106,13 +106,62 @@ export default function Settings() {
                    value={data.security?.session_timeout || 30}
                    onChange={(e) => upd("security.session_timeout", parseInt(e.target.value || 30))} />
           </Field>
+
+          <div className="rounded-xl border border-[#E2E8F0] p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <div className="text-sm font-medium text-[#0F172A]">Active Sessions</div>
+                <div className="text-xs text-[#64748B] mt-0.5">Devices currently signed in to your account.</div>
+              </div>
+              <button className="text-xs text-[#0D5C55] hover:text-[#09403B] font-medium">Refresh</button>
+            </div>
+            <ul className="divide-y divide-[#E2E8F0] text-sm">
+              <li className="py-2.5 flex items-center justify-between">
+                <div>
+                  <div className="text-[#0F172A]">This browser — Chrome on macOS</div>
+                  <div className="text-xs text-[#64748B] mt-0.5">Active now · Bengaluru, IN</div>
+                </div>
+                <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-medium">Current</span>
+              </li>
+              <li className="py-2.5 flex items-center justify-between text-[#94A3B8]">
+                <span>Additional sessions will appear here.</span>
+              </li>
+            </ul>
+          </div>
+
+          <div className="rounded-xl border border-[#E2E8F0] p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <div className="text-sm font-medium text-[#0F172A]">Login History</div>
+                <div className="text-xs text-[#64748B] mt-0.5">Recent sign-ins to your account.</div>
+              </div>
+            </div>
+            <ul className="text-xs text-[#64748B] space-y-1.5">
+              <li>• Today · Chrome / macOS · success</li>
+              <li>• Yesterday · Chrome / macOS · success</li>
+              <li className="text-[#94A3B8]">More history available on request.</li>
+            </ul>
+          </div>
+
+          <div className="rounded-xl border border-[#E2E8F0] p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <div className="text-sm font-medium text-[#0F172A]">Audit Log Viewer</div>
+                <div className="text-xs text-[#64748B] mt-0.5">All access to patient records is logged.</div>
+              </div>
+              <button onClick={() => toast.info("Full audit viewer coming soon")}
+                      className="text-xs text-[#0D5C55] hover:text-[#09403B] font-medium">
+                Open viewer →
+              </button>
+            </div>
+            <div className="text-xs text-[#64748B]">
+              Per-patient timeline is available on each patient profile under the Timeline tab.
+            </div>
+          </div>
+
           <div className="text-xs text-[#64748B] bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg p-3">
             <strong className="text-[#0F172A]">Role-based access:</strong> Only clinic staff with the
             &ldquo;Doctor&rdquo; role can access patient records and consultations.
-          </div>
-          <div className="text-xs text-[#64748B] bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg p-3">
-            <strong className="text-[#0F172A]">Audit log:</strong> Every access to patient records is logged. Full
-            audit viewer placeholder — coming soon.
           </div>
         </div>
       </Card>

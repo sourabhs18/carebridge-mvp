@@ -1,19 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "@/lib/api";
-
-const STATUS_LABEL = {
-  not_generated: "Not generated",
-  generating: "Generating",
-  ready: "Ready for review",
-  approved: "Approved",
-};
-const STATUS_COLORS = {
-  not_generated: "bg-slate-100 text-slate-600",
-  generating: "bg-sky-50 text-sky-700",
-  ready: "bg-teal-50 text-teal-700",
-  approved: "bg-emerald-50 text-emerald-700",
-};
+import { StatusBadge, statusOf, fmtDate, fmtDateTime } from "@/lib/helpers";
 
 export default function Consultations() {
   const [list, setList] = useState([]);
@@ -37,27 +25,25 @@ export default function Consultations() {
               <th className="p-4">Date</th>
               <th className="p-4">Patient</th>
               <th className="p-4">Reason</th>
-              <th className="p-4">Summary Status</th>
-              <th className="p-4">Last Updated</th>
+              <th className="p-4">Status</th>
+              <th className="p-4">Follow-up</th>
+              <th className="p-4">Updated</th>
               <th className="p-4 text-right">Action</th>
             </tr>
           </thead>
           <tbody>
             {list.length === 0 && (
-              <tr><td colSpan="6" className="p-8 text-center text-sm text-[#64748B]">No consultations yet.</td></tr>
+              <tr><td colSpan="7" className="p-8 text-center text-sm text-[#64748B]">No consultations yet.</td></tr>
             )}
             {list.map((c) => (
               <tr key={c.consultation_id} className="border-t border-[#E2E8F0] hover:bg-[#F8FAFC] transition-colors cursor-pointer"
                   onClick={() => navigate(`/consultation/${c.consultation_id}/review`)}>
-                <td className="p-4 text-sm">{new Date(c.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}</td>
+                <td className="p-4 text-sm">{fmtDate(c.created_at)}</td>
                 <td className="p-4 text-sm font-medium text-[#0F172A]">{c.patient_name}</td>
                 <td className="p-4 text-sm text-[#64748B]">{c.visit_reason || "—"}</td>
-                <td className="p-4">
-                  <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[c.summary_status]}`}>
-                    {STATUS_LABEL[c.summary_status]}
-                  </span>
-                </td>
-                <td className="p-4 text-sm text-[#64748B]">{new Date(c.updated_at).toLocaleString("en-IN", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "short" })}</td>
+                <td className="p-4"><StatusBadge status={statusOf(c)} /></td>
+                <td className="p-4 text-sm text-[#64748B]">{c.followup_date ? fmtDate(c.followup_date) : "—"}</td>
+                <td className="p-4 text-sm text-[#64748B]">{fmtDateTime(c.updated_at)}</td>
                 <td className="p-4 text-right">
                   <button className="px-3 h-9 rounded-lg border border-[#E2E8F0] hover:bg-white text-[#0F172A] text-sm font-medium">View</button>
                 </td>

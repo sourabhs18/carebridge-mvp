@@ -2,7 +2,7 @@ import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   LayoutDashboard, Users, Stethoscope, CalendarDays, Settings as Cog,
-  LogOut, Search, ChevronDown, ShieldCheck,
+  LogOut, Search, ChevronDown, ShieldCheck, Smartphone,
 } from "lucide-react";
 import { useState } from "react";
 import {
@@ -76,6 +76,23 @@ export default function AppShell() {
               {label}
             </NavLink>
           ))}
+
+          <div className="pt-3 mt-3 border-t border-[#E2E8F0]">
+            <div className="text-[10px] tracking-[0.12em] uppercase text-[#94A3B8] font-semibold px-3 mb-2">
+              Roadmap
+            </div>
+            <div
+              data-testid="nav-patient-app-soon"
+              className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-[#94A3B8] cursor-not-allowed"
+              aria-disabled="true"
+            >
+              <Smartphone className="h-4 w-4" strokeWidth={1.6} />
+              Patient App
+              <span className="ml-auto text-[9px] tracking-[0.08em] uppercase px-1.5 py-0.5 rounded bg-[#F8FAFC] border border-[#E2E8F0]">
+                Soon
+              </span>
+            </div>
+          </div>
         </nav>
 
         <button

@@ -1,38 +1,23 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import api, { formatApiErrorDetail } from "@/lib/api";
 import {
-  Mic, Square, Pause, Upload, ShieldCheck, Sparkles, Loader2, ArrowRight,
+  Mic, Square, Pause, Upload, ShieldCheck, Sparkles, Loader2, ArrowRight, CheckCircle2,
 } from "lucide-react";
 import { toast } from "sonner";
-
-const STATUS_LABEL = {
-  not_generated: "Not generated",
-  generating: "Generating…",
-  ready: "Ready for review",
-  approved: "Approved",
-};
-
-const STATUS_COLORS = {
-  not_generated: "bg-slate-100 text-slate-600",
-  generating: "bg-sky-50 text-sky-700",
-  ready: "bg-teal-50 text-teal-700",
-  approved: "bg-emerald-50 text-emerald-700",
-};
+import { StatusBadge, statusOf, formatDuration } from "@/lib/helpers";
 
 export default function StartConsultation() {
-  const { cid, patientId } = useParams();
+  const { cid } = useParams();
   const navigate = useNavigate();
   const [c, setC] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Pre-consultation form
   const [visitReason, setVisitReason] = useState("");
   const [symptoms, setSymptoms] = useState("");
   const [vitals, setVitals] = useState({ bp: "", hr: "", temp: "", spo2: "", weight: "" });
   const [consent, setConsent] = useState({ patient: false, doctor: false, exclude_sensitive: false });
 
-  // Recording
   const [recording, setRecording] = useState(false);
   const [paused, setPaused] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -44,42 +29,72 @@ export default function StartConsultation() {
 
   const [transcript, setTranscript] = useState("");
   const [editingTranscript, setEditingTranscript] = useState(false);
-  const [generatingPatient, setGeneratingPatient] = useState(false);
-  const [generatingDoctor, setGeneratingDoctor] = useState(false);
+  const [autoGenerating, setAutoGenerating] = useState(false);
+  const [savedAt, setSavedAt] = useState(null);
+  const lastSavedRef = useRef({});
 
-  // Load consultation
+  // ---- Load consultation ----
   useEffect(() => {
     (async () => {
       try {
-        let consultId = cid;
-        if (!consultId && patientId) {
-          const { data } = await api.post("/consultations", { patient_id: patientId });
-          consultId = data.consultation_id;
-          navigate(`/consultation/${consultId}`, { replace: true });
-          setC(data);
-        } else {
-          const { data } = await api.get(`/consultations/${consultId}`);
-          setC(data);
-          setVisitReason(data.visit_reason || "");
-          setSymptoms(data.symptoms || "");
-          setVitals({ bp: "", hr: "", temp: "", spo2: "", weight: "", ...(data.vitals || {}) });
-          setTranscript(data.transcript || "");
-        }
+        const { data } = await api.get(`/consultations/${cid}`);
+        setC(data);
+        setVisitReason(data.visit_reason || "");
+        setSymptoms(data.symptoms || "");
+        setVitals({ bp: "", hr: "", temp: "", spo2: "", weight: "", ...(data.vitals || {}) });
+        setTranscript(data.transcript || "");
+        if (data.duration_seconds) setElapsed(data.duration_seconds);
+        lastSavedRef.current = {
+          visit_reason: data.visit_reason || "",
+          symptoms: data.symptoms || "",
+          vitals: data.vitals || {},
+          transcript: data.transcript || "",
+        };
       } catch {
         toast.error("Could not load consultation");
       } finally {
         setLoading(false);
       }
     })();
-  }, [cid, patientId, navigate]);
+  }, [cid]);
+
+  // ---- Polling for status when "generating" (after auto-trigger) ----
+  useEffect(() => {
+    if (c?.summary_status !== "generating") return;
+    const id = setInterval(async () => {
+      try {
+        const { data } = await api.get(`/consultations/${cid}`);
+        setC(data);
+        if (data.summary_status !== "generating") clearInterval(id);
+      } catch { /* ignore */ }
+    }, 3000);
+    return () => clearInterval(id);
+  }, [c?.summary_status, cid]);
+
+  // ---- Auto-save every 30s if changed ----
+  const doAutosave = useCallback(async () => {
+    if (!cid) return;
+    const cur = { visit_reason: visitReason, symptoms, vitals, transcript };
+    if (JSON.stringify(cur) === JSON.stringify(lastSavedRef.current)) return;
+    try {
+      const { data } = await api.put(`/consultations/${cid}/autosave`, cur);
+      lastSavedRef.current = cur;
+      setSavedAt(data.saved_at);
+    } catch { /* silent */ }
+  }, [cid, visitReason, symptoms, vitals, transcript]);
+
+  useEffect(() => {
+    const id = setInterval(doAutosave, 30000);
+    return () => clearInterval(id);
+  }, [doAutosave]);
+
+  // Save on unmount / route change
+  useEffect(() => () => { doAutosave(); }, [doAutosave]);
 
   const consentAll = consent.patient && consent.doctor && consent.exclude_sensitive;
 
   const startRecording = async () => {
-    if (!consentAll) {
-      toast.error("Please confirm all consent items before recording.");
-      return;
-    }
+    if (!consentAll) return toast.error("Please confirm all consent items before recording.");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const recorder = new MediaRecorder(stream);
@@ -120,6 +135,8 @@ export default function StartConsultation() {
     setRecording(false);
     setPaused(false);
     clearInterval(timerRef.current);
+    // Save duration to server
+    api.put(`/consultations/${cid}/duration`, { duration_seconds: elapsed }).catch(() => {});
   };
 
   const uploadAudio = async (blob) => {
@@ -127,12 +144,14 @@ export default function StartConsultation() {
     const fd = new FormData();
     fd.append("file", blob, "consultation.webm");
     try {
-      const { data } = await api.post(`/consultations/${c.consultation_id}/audio`, fd, {
-        headers: { "Content-Type": "multipart/form-data" },
-        timeout: 180000,
+      const { data } = await api.post(`/consultations/${cid}/audio`, fd, {
+        headers: { "Content-Type": "multipart/form-data" }, timeout: 180000,
       });
       setTranscript(data.transcript || "");
-      toast.success("Transcript generated");
+      lastSavedRef.current.transcript = data.transcript || "";
+      toast.success("Transcript generated. Starting AI summary…");
+      // Auto-trigger summary
+      triggerAutoGenerate();
     } catch (e) {
       toast.error(formatApiErrorDetail(e.response?.data?.detail) || "Transcription failed");
     } finally {
@@ -148,59 +167,65 @@ export default function StartConsultation() {
   };
 
   const saveTranscript = async () => {
-    await api.put(`/consultations/${c.consultation_id}/transcript`, { transcript });
-    setEditingTranscript(false);
-    toast.success("Transcript saved");
+    try {
+      await api.put(`/consultations/${cid}/transcript`, { transcript });
+      lastSavedRef.current.transcript = transcript;
+      setEditingTranscript(false);
+      toast.success("Transcript saved. Starting AI summary…");
+      triggerAutoGenerate();
+    } catch (e) {
+      toast.error(formatApiErrorDetail(e.response?.data?.detail) || e.message);
+    }
   };
 
-  const generate = async (type) => {
-    if (!transcript.trim()) {
-      toast.error("Add a transcript first.");
-      return;
-    }
-    if (type === "patient") setGeneratingPatient(true);
-    else setGeneratingDoctor(true);
+  const triggerAutoGenerate = async () => {
+    if (!transcript.trim()) return;
+    setAutoGenerating(true);
+    setC((cur) => ({ ...cur, summary_status: "generating" }));
     try {
-      const url = type === "patient"
-        ? `/consultations/${c.consultation_id}/generate-patient-summary`
-        : `/consultations/${c.consultation_id}/generate-doctor-notes`;
-      await api.post(url, {}, { timeout: 120000 });
-      toast.success(type === "patient" ? "Patient summary ready" : "Doctor notes ready");
-      const { data } = await api.get(`/consultations/${c.consultation_id}`);
-      setC(data);
+      const { data } = await api.post(`/consultations/${cid}/auto-generate`, {}, { timeout: 180000 });
+      toast.success("AI summary ready. Review and approve.");
+      const { data: fresh } = await api.get(`/consultations/${cid}`);
+      setC(fresh);
+      // Auto-navigate to review
+      setTimeout(() => navigate(`/consultation/${cid}/review`), 800);
     } catch (e) {
       toast.error(formatApiErrorDetail(e.response?.data?.detail) || "Generation failed");
     } finally {
-      setGeneratingPatient(false);
-      setGeneratingDoctor(false);
+      setAutoGenerating(false);
     }
   };
 
-  const goReview = () => navigate(`/consultation/${c.consultation_id}/review`);
-
-  const mmss = (s) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+  const goReview = () => navigate(`/consultation/${cid}/review`);
 
   if (loading || !c) return null;
 
-  const patientSummaryReady = Object.keys(c.patient_summary || {}).length > 0;
-  const doctorNotesReady = Object.keys(c.doctor_notes || {}).length > 0;
-
   return (
     <div className="max-w-5xl">
-      <div className="mb-6">
-        <div className="text-xs tracking-[0.05em] uppercase text-[#64748B] font-semibold">Consultation</div>
-        <h1 className="font-heading text-3xl md:text-4xl font-semibold text-[#0F172A] mt-1 tracking-tight">
-          {c.patient_name}
-        </h1>
-        <div className="mt-2 flex flex-wrap items-center gap-x-6 gap-y-1 text-sm text-[#64748B]">
-          <span className="font-mono">{c.patient_id}</span>
-          <span>{new Date(c.created_at).toLocaleString("en-IN")}</span>
-          <span>with {c.doctor_name}</span>
+      <div className="flex items-end justify-between mb-6 gap-4 flex-wrap">
+        <div>
+          <div className="text-xs tracking-[0.05em] uppercase text-[#64748B] font-semibold">Consultation</div>
+          <h1 className="font-heading text-3xl md:text-4xl font-semibold text-[#0F172A] mt-1 tracking-tight">
+            {c.patient_name}
+          </h1>
+          <div className="mt-2 flex flex-wrap items-center gap-x-6 gap-y-1 text-sm text-[#64748B]">
+            <span className="font-mono">{c.patient_id}</span>
+            <span>{new Date(c.created_at).toLocaleString("en-IN")}</span>
+            <span>with {c.doctor_name}</span>
+            <StatusBadge status={statusOf(c)} />
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          {savedAt && (
+            <span className="text-xs text-[#64748B] inline-flex items-center gap-1">
+              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> Draft saved
+            </span>
+          )}
         </div>
       </div>
 
       {/* A. Pre-consultation details */}
-      <Section title="A. Pre-consultation Details" subtitle="Capture context before recording.">
+      <Section title="A. Pre-consultation Details" subtitle="Capture context before recording. Auto-saves every 30 seconds.">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <Field label="Visit Reason">
             <input value={visitReason} onChange={(e) => setVisitReason(e.target.value)}
@@ -248,46 +273,47 @@ export default function StartConsultation() {
             <label key={k} className="flex items-center gap-3 py-1.5 cursor-pointer">
               <input type="checkbox" checked={consent[k]}
                      onChange={(e) => setConsent({ ...consent, [k]: e.target.checked })}
-                     data-testid={`consent-${k}`}
-                     className="h-4 w-4 accent-[#0D5C55]" />
+                     data-testid={`consent-${k}`} className="h-4 w-4 accent-[#0D5C55]" />
               <span className="text-sm text-[#0F172A]">{label}</span>
             </label>
           ))}
         </div>
 
-        <div className="mt-6 flex flex-col md:flex-row md:items-center gap-4 p-5 rounded-xl border border-[#E2E8F0]">
-          <div className="flex items-center gap-3 min-w-[200px]">
-            <div className={`relative h-10 w-10 rounded-full flex items-center justify-center ${recording ? "bg-rose-50" : "bg-[#F8FAFC]"}`}>
-              {recording && <span className="absolute h-3 w-3 rounded-full bg-rose-500 cb-recording-dot" />}
-              {!recording && <Mic className="h-5 w-5 text-[#0D5C55]" />}
+        {/* Big consultation timer */}
+        <div className="mt-6 rounded-xl border border-[#E2E8F0] p-6 flex flex-col md:flex-row md:items-center gap-6">
+          <div className="flex items-center gap-4">
+            <div className={`relative h-14 w-14 rounded-full flex items-center justify-center ${recording ? "bg-rose-50" : "bg-[#F8FAFC]"}`}>
+              {recording && <span className="absolute h-3.5 w-3.5 rounded-full bg-rose-500 cb-recording-dot" />}
+              {!recording && <Mic className="h-6 w-6 text-[#0D5C55]" />}
             </div>
             <div>
-              <div className="text-xs tracking-[0.05em] uppercase text-[#64748B] font-semibold">Status</div>
-              <div className="text-sm font-medium text-[#0F172A]">
+              <div className="text-xs tracking-[0.05em] uppercase text-[#64748B] font-semibold">Consultation Duration</div>
+              <div className="font-heading text-4xl md:text-5xl font-semibold text-[#0F172A] tracking-tight tabular-nums mt-1">
+                {formatDuration(elapsed)}
+              </div>
+              <div className="text-xs text-[#64748B] mt-1">
                 {uploading ? "Uploading & transcribing…" : recording ? (paused ? "Paused" : "Recording") : "Idle"}
               </div>
             </div>
           </div>
 
-          <div className="flex-1 font-mono text-2xl tracking-wider text-[#0F172A]">{mmss(elapsed)}</div>
-
-          <div className="flex gap-2 flex-wrap">
+          <div className="flex-1 flex flex-wrap gap-2 justify-end">
             {!recording ? (
               <button onClick={startRecording} disabled={!consentAll || uploading}
                       data-testid="start-recording-btn"
-                      className="h-11 px-5 rounded-lg bg-[#0D5C55] hover:bg-[#09403B] text-white font-medium inline-flex items-center gap-2 disabled:opacity-50">
+                      className="h-12 px-6 rounded-lg bg-[#0D5C55] hover:bg-[#09403B] text-white font-medium inline-flex items-center gap-2 disabled:opacity-50">
                 <Mic className="h-4 w-4" /> Start Recording
               </button>
             ) : (
               <>
                 <button onClick={pauseRecording}
                         data-testid="pause-recording-btn"
-                        className="h-11 px-4 rounded-lg border border-[#E2E8F0] text-[#0F172A] hover:bg-[#F8FAFC] font-medium inline-flex items-center gap-2">
+                        className="h-12 px-4 rounded-lg border border-[#E2E8F0] text-[#0F172A] hover:bg-[#F8FAFC] font-medium inline-flex items-center gap-2">
                   <Pause className="h-4 w-4" /> {paused ? "Resume" : "Pause"}
                 </button>
                 <button onClick={stopRecording}
                         data-testid="stop-recording-btn"
-                        className="h-11 px-4 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-medium inline-flex items-center gap-2">
+                        className="h-12 px-4 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-medium inline-flex items-center gap-2">
                   <Square className="h-4 w-4" /> Stop
                 </button>
               </>
@@ -295,23 +321,22 @@ export default function StartConsultation() {
             <input ref={fileInputRef} type="file" accept="audio/*" className="hidden" onChange={onPickFile} />
             <button onClick={() => fileInputRef.current?.click()} disabled={uploading}
                     data-testid="upload-audio-btn"
-                    className="h-11 px-4 rounded-lg border border-[#E2E8F0] text-[#0F172A] hover:bg-[#F8FAFC] font-medium inline-flex items-center gap-2 disabled:opacity-50">
-              {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-              Upload Audio
+                    className="h-12 px-4 rounded-lg border border-[#E2E8F0] text-[#0F172A] hover:bg-[#F8FAFC] font-medium inline-flex items-center gap-2 disabled:opacity-50">
+              {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />} Upload Audio
             </button>
           </div>
         </div>
       </Section>
 
       {/* C. Transcript */}
-      <Section title="C. Transcript" subtitle="Edit the transcript before generating summaries.">
+      <Section title="C. Transcript" subtitle="Saving the transcript automatically generates a doctor note and a patient-friendly summary.">
         <textarea
           value={transcript}
           onChange={(e) => setTranscript(e.target.value)}
           readOnly={!editingTranscript}
-          placeholder="Consultation transcript will appear here after audio processing."
+          placeholder="Consultation transcript will appear here after audio processing. You can also type or paste a transcript manually."
           data-testid="transcript-area"
-          className={`w-full min-h-[200px] rounded-xl border border-[#E2E8F0] p-4 text-sm bg-white ${editingTranscript ? "focus:ring-2 focus:ring-[#0D5C55]/30 focus:border-[#0D5C55] outline-none" : "bg-[#F8FAFC]"}`}
+          className={`w-full min-h-[220px] rounded-xl border border-[#E2E8F0] p-4 text-sm bg-white ${editingTranscript ? "focus:ring-2 focus:ring-[#0D5C55]/30 focus:border-[#0D5C55] outline-none" : "bg-[#F8FAFC]"}`}
         />
         <div className="mt-3 flex gap-2">
           {!editingTranscript ? (
@@ -323,43 +348,37 @@ export default function StartConsultation() {
           ) : (
             <button onClick={saveTranscript}
                     data-testid="save-transcript-btn"
-                    className="h-10 px-4 rounded-lg bg-[#0D5C55] hover:bg-[#09403B] text-white font-medium text-sm">
-              Save Transcript
+                    className="h-10 px-4 rounded-lg bg-[#0D5C55] hover:bg-[#09403B] text-white font-medium text-sm inline-flex items-center gap-2">
+              {autoGenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              Save Transcript & Auto-Generate
             </button>
           )}
         </div>
       </Section>
 
-      {/* D. AI Summary */}
-      <Section title="D. Generate AI Summary" subtitle="Review and approve everything in the next step.">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="rounded-xl border border-[#E2E8F0] p-5">
-            <div className="flex items-center justify-between mb-3">
-              <div className="font-heading text-base font-medium text-[#0F172A]">Patient-friendly Summary</div>
-              <Badge status={patientSummaryReady ? "ready" : c.summary_status} />
+      {/* D. AI Summary status */}
+      <Section title="D. AI Summary" subtitle="Doctor notes and patient-friendly summary are generated together.">
+        <div className="rounded-xl border border-[#E2E8F0] p-5 flex items-center justify-between flex-wrap gap-3">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-lg bg-[#F8FAFC] flex items-center justify-center text-[#0D5C55]">
+              <Sparkles className="h-5 w-5" />
             </div>
-            <button onClick={() => generate("patient")} disabled={generatingPatient}
-                    data-testid="generate-patient-summary-btn"
-                    className="w-full h-11 rounded-lg bg-[#0D5C55] hover:bg-[#09403B] text-white font-medium inline-flex items-center justify-center gap-2 disabled:opacity-60">
-              {generatingPatient ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-              Generate Patient Summary
-            </button>
+            <div>
+              <div className="text-sm font-medium text-[#0F172A]">Patient summary & doctor notes</div>
+              <div className="text-xs text-[#64748B] mt-0.5">Auto-generates when transcript is saved.</div>
+            </div>
           </div>
-          <div className="rounded-xl border border-[#E2E8F0] p-5">
-            <div className="flex items-center justify-between mb-3">
-              <div className="font-heading text-base font-medium text-[#0F172A]">Doctor Clinical Notes</div>
-              <Badge status={doctorNotesReady ? "ready" : "not_generated"} />
-            </div>
-            <button onClick={() => generate("doctor")} disabled={generatingDoctor}
-                    data-testid="generate-doctor-notes-btn"
-                    className="w-full h-11 rounded-lg bg-white border border-[#E2E8F0] hover:bg-[#F8FAFC] text-[#0F172A] font-medium inline-flex items-center justify-center gap-2 disabled:opacity-60">
-              {generatingDoctor ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-              Generate Doctor Notes
+          <div className="flex items-center gap-3">
+            <StatusBadge status={statusOf(c)} />
+            <button onClick={triggerAutoGenerate} disabled={autoGenerating || !transcript.trim()}
+                    data-testid="manual-generate-btn"
+                    className="h-10 px-4 rounded-lg border border-[#E2E8F0] hover:bg-[#F8FAFC] text-[#0F172A] text-sm font-medium inline-flex items-center gap-2 disabled:opacity-60">
+              {autoGenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} Regenerate
             </button>
           </div>
         </div>
 
-        <div className="mt-6 flex justify-end">
+        <div className="mt-5 flex justify-end">
           <button onClick={goReview} data-testid="go-to-review-btn"
                   className="h-11 px-5 rounded-lg bg-[#0F172A] text-white font-medium inline-flex items-center gap-2 hover:bg-[#1E293B]">
             Review & Approve <ArrowRight className="h-4 w-4" />
@@ -391,13 +410,5 @@ function Field({ label, children }) {
       <label className="text-xs tracking-[0.05em] uppercase text-[#64748B] font-semibold">{label}</label>
       <div className="mt-2">{children}</div>
     </div>
-  );
-}
-
-function Badge({ status }) {
-  return (
-    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[status] || STATUS_COLORS.not_generated}`}>
-      {STATUS_LABEL[status] || STATUS_LABEL.not_generated}
-    </span>
   );
 }
