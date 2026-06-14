@@ -1,0 +1,135 @@
+{
+  "theme": "LIGHT",
+  "archetype": "1 (Organic & Earthy / Trust) + 4 (Swiss & High Contrast / Modern Editorial)",
+  "color_palette": {
+    "background": "#FFFFFF",
+    "surface": "#F8FAFC",
+    "primary": "#0D5C55",
+    "primary_hover": "#09403B",
+    "accent_navy": "#0F172A",
+    "text_main": "#020617",
+    "text_muted": "#64748B",
+    "border": "#E2E8F0",
+    "status": {
+      "not_generated": "#94A3B8",
+      "generating": "#0EA5E9",
+      "ready": "#0D5C55",
+      "approved": "#10B981"
+    }
+  },
+  "typography": {
+    "heading_font": "Outfit",
+    "body_font": "Plus Jakarta Sans",
+    "rules": {
+      "h1": "text-4xl md:text-5xl tracking-tight text-[#0F172A] font-semibold",
+      "h2": "text-2xl md:text-3xl tracking-tight text-[#0F172A] font-medium",
+      "h3": "text-xl tracking-tight text-[#0F172A] font-medium",
+      "body": "text-base leading-relaxed text-[#020617]",
+      "labels": "text-xs tracking-[0.05em] uppercase text-[#64748B] font-semibold",
+      "data_value": "text-sm md:text-base font-medium text-[#020617]"
+    }
+  },
+  "layout_spacing": {
+    "philosophy": "Generous spacing, tablet-friendly touch targets (min 44px height), minimalistic clutter-free design. Data density without feeling cramped.",
+    "sidebar": "w-64 bg-[#F8FAFC] border-r border-[#E2E8F0] flex flex-col h-screen",
+    "main_content": "flex-1 bg-[#FFFFFF] min-h-screen overflow-y-auto",
+    "cards": "bg-[#FFFFFF] border border-[#E2E8F0] rounded-xl shadow-sm p-6 hover:shadow-md transition-shadow",
+    "glass_panels": "bg-[#FFFFFF]/90 backdrop-blur-xl border border-[#E2E8F0]"
+  },
+  "components": {
+    "buttons": {
+      "primary": "bg-[#0D5C55] hover:bg-[#09403B] text-white rounded-lg font-medium transition-colors duration-200 h-12 px-6 flex items-center justify-center gap-2",
+      "secondary": "bg-white hover:bg-[#F8FAFC] text-[#0F172A] border border-[#E2E8F0] rounded-lg font-medium transition-colors duration-200 h-12 px-6 flex items-center justify-center gap-2",
+      "ghost": "hover:bg-[#F8FAFC] text-[#64748B] hover:text-[#0F172A] rounded-lg font-medium transition-colors duration-200 h-12 px-4 flex items-center justify-center"
+    },
+    "inputs": "h-12 rounded-lg border border-[#E2E8F0] px-4 w-full focus:ring-2 focus:ring-[#0D5C55] focus:border-transparent outline-none bg-white text-base",
+    "tables": {
+      "container": "w-full text-left border-collapse",
+      "header": "bg-[#F8FAFC] text-xs uppercase tracking-wider text-[#64748B] font-semibold border-y border-[#E2E8F0]",
+      "cell": "p-4 border-b border-[#E2E8F0] align-middle text-sm text-[#020617]",
+      "row_hover": "hover:bg-[#F8FAFC] transition-colors cursor-pointer"
+    },
+    "modals": {
+      "overlay": "fixed inset-0 bg-[#0F172A]/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 sm:p-6",
+      "content": "bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto"
+    },
+    "tabs": {
+      "container": "flex space-x-8 border-b border-[#E2E8F0] mb-6 overflow-x-auto no-scrollbar",
+      "item": "pb-4 text-sm font-medium border-b-2 transition-colors whitespace-nowrap",
+      "active": "border-[#0D5C55] text-[#0D5C55]",
+      "inactive": "border-transparent text-[#64748B] hover:text-[#0F172A] hover:border-[#E2E8F0]"
+    },
+    "badges": "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium"
+  },
+  "specific_pages": {
+    "login": {
+      "layout": "Two-column split screen. Left side: Form. Right side: Abstract teal texture background",
+      "elements": ["Email", "Password", "Login Button", "Forgot Password", "Create Account", "Privacy Footer"]
+    },
+    "doctor_dashboard": {
+      "layout": "Sidebar + Main Content Header + Grid Layout",
+      "stat_cards": "Grid cols-1 sm:cols-2 lg:cols-4 gap-6 mb-8. Include subtle icons.",
+      "tables": "Two tables side-by-side or stacked: 'Today's Appointments' and 'Recent Consultations'."
+    },
+    "patients_page": {
+      "layout": "Header with global search and 'Add New Patient' primary button.",
+      "table_features": "Masked Indian phone numbers (e.g., +91 •••• •• 4567), Avatar initials with soft background colors."
+    },
+    "add_patient_popup": {
+      "layout": "Modal structure. Two-column grid inside for personal vs medical fields.",
+      "fields": "Name, Age, Gender, Phone, Blood Group, Medical History. Prominent Consent Checkbox before save."
+    },
+    "patient_profile": {
+      "layout": "Top Header (Patient Info Card) + Tabs navigation",
+      "tabs": ["Overview", "Consultations", "Medications", "Documents", "Consent Log"]
+    },
+    "start_consultation": {
+      "layout": "Focus-mode layout. Minimal distractions.",
+      "components": "Pre-consultation details -> Vitals inputs -> Prominent Consent Panel -> Recording Controls (large touch targets) -> Live Transcript feed -> AI Generate Buttons"
+    },
+    "consultation_summary_review": {
+      "layout": "Side-by-side Two Column layout (md:grid-cols-2 gap-8).",
+      "left_column": "Patient-Friendly Summary (simplified language, editable blocks)",
+      "right_column": "Doctor Clinical Notes (medical terminology, editable blocks)",
+      "actions": "Sticky footer or top-right actions for Approval Workflow."
+    },
+    "settings": {
+      "layout": "Sidebar navigation + Main form area.",
+      "sections": ["Doctor Profile", "Clinic Profile", "Security", "Consent Template", "Notifications"]
+    }
+  },
+  "media": {
+    "images": [
+      {
+        "category": "Login Background",
+        "url": "https://images.unsplash.com/photo-1657215374010-786fefd1dbbc?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzZ8MHwxfHNlYXJjaHwxfHxhYnN0cmFjdCUyMHRlYWwlMjB0ZXh0dXJlfGVufDB8fHx8MTc4MTQ1NzU0NXww&ixlib=rb-4.1.0&q=85",
+        "description": "Abstract teal texture used for the right-hand side of the login screen."
+      },
+      {
+        "category": "Dashboard Placeholder / Welcome Graphic",
+        "url": "https://images.unsplash.com/photo-1557825835-70d97c4aa567?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Njd8MHwxfHNlYXJjaHwxfHxkb2N0b3IlMjB0YWJsZXR8ZW58MHx8fHwxNzgxNDU3NTQ1fDA&ixlib=rb-4.1.0&q=85",
+        "description": "Doctor using a tablet. Useful for empty states or onboarding."
+      },
+      {
+        "category": "Clinic Info / Settings Banner",
+        "url": "https://images.unsplash.com/photo-1777269749032-d8d458ae594d?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMzN8MHwxfHNlYXJjaHwxfHxtb2Rlcm4lMjBjbGluaWMlMjBpbnRlcmlvcnxlbnwwfHx8fDE3ODE0NTc1NDV8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Modern clinic interior, usable as a banner in Clinic Profile settings."
+      }
+    ],
+    "icons": "Use 'lucide-react'. Stroke width 1.5 for a sophisticated look."
+  },
+  "testing": {
+    "requirement": "CRITICAL: All interactive and key informational elements MUST include a data-testid attribute. Use kebab-case and role-based naming (e.g., data-testid='login-submit-button', data-testid='add-patient-modal-trigger')."
+  },
+  "instructions_to_main_agent": [
+    "DO NOT USE INTER OR ROBOTO fonts. Use Google Fonts: 'Outfit' for headings and 'Plus Jakarta Sans' for body text.",
+    "Use deeply saturated teal (#0D5C55) for primary accents, not generic bootstrap blue or purple.",
+    "Implement mock data using an Indian context: Names like 'Dr. Aisha Sharma', 'Rahul Kumar', and masked numbers like '+91 •••• •• 4567'.",
+    "Ensure all buttons and inputs are minimum 44px (h-11 or h-12) to be tablet-friendly.",
+    "When building tables, ensure patient rows use the hover states defined. Add status badges with the distinct colors provided.",
+    "For the Start Consultation view, the recording controls must be prominent with clear visual feedback (pulse animations) when recording.",
+    "The Consultation Summary requires a literal two-column split on desktop (Patient Summary vs Clinical Notes) to allow doctors to review both simultaneously.",
+    "Never use fully transparent headers over content; always use the specified glass_panels styles.",
+    "Include the required data-testid on all interactive elements as defined in the testing requirements."
+  ]
+}
