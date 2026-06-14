@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import api from "@/lib/api";
+import api, { formatApiErrorDetail } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
+import { toast } from "sonner";
 import {
   Stethoscope, ClipboardList, Bell, Users as UsersIcon, ArrowUpRight, Clock,
 } from "lucide-react";
@@ -62,13 +63,24 @@ export default function Dashboard() {
   }, []);
 
   const startConsultation = async (patientName) => {
-    const patient = patients.find((p) => p.full_name === patientName);
-    if (!patient) {
-      navigate("/patients");
-      return;
+    try {
+      let list = patients;
+      if (!list || list.length === 0) {
+        const { data } = await api.get("/patients");
+        list = data || [];
+        setPatients(list);
+      }
+      const patient = list.find((p) => p.full_name === patientName);
+      if (!patient) {
+        toast.error(`${patientName} is not in your patient list yet. Add them first.`);
+        navigate("/patients");
+        return;
+      }
+      const { data } = await api.post("/consultations", { patient_id: patient.patient_id });
+      navigate(`/consultation/${data.consultation_id}`);
+    } catch (e) {
+      toast.error(formatApiErrorDetail(e.response?.data?.detail) || "Could not start consultation");
     }
-    const { data } = await api.post("/consultations", { patient_id: patient.patient_id });
-    navigate(`/consultation/${data.consultation_id}`);
   };
 
   return (
